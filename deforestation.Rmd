@@ -1,0 +1,320 @@
+---
+title: "Deforestation - Tidytuesday"
+author: "Zsombor Hegedus"
+date: '2021 April 7 '
+output:
+  html_document: default
+  pdf_document: default
+---
+
+``` {r, include = F}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, results = 'hide')
+```
+
+```{r, message = F}
+
+# import required packages 
+
+library(tidyverse)
+library(scales)
+library(ggthemes)
+library(ggiraph)
+library(tidyverse)
+library(data.table)
+library(glue)
+library(countrycode)
+
+```
+
+
+This markdown is to analyse one of the [tidytuesday](https://github.com/rfordatascience/tidytuesday) datasets as a final submission for my [Data Visualization 2: Practical Data Visualization with R](https://courses.ceu.edu/courses/2020-2021/data-visualization-2-practical-data-visualization-r) for the Central European University. I picked the [deforestation](https://github.com/rfordatascience/tidytuesday/tree/master/data/2021/2021-04-06) dataset which contains 5 csvs. I will concentrate only on the following 3: 
+
+ - *Forest* - This dataset contains data on how much net forest cover changed for every country in 4 years (1990, 2000, 2010, 2015).
+ - *Forest Area* - Shows what was the forest share of each country in given year from 1990 to 2020
+ - *Brazil* - It has some of the drivers of deforestation that occured in Brasil. 
+
+The goal of this paper is to analyse whether deforestation occurrs evenly all over the world or there are continent specific differences that can be easily seen from plots.
+
+Data was downloaded with the tidytuesdayR package's tt_load function as seen below: 
+
+```{r, message = F}
+
+# I ran out of reamining github queries so had to download data directly from github
+# tuesdata <- tidytuesdayR::tt_load('2021-04-06')
+
+forest <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-04-06/forest.csv') %>% as.data.table()
+forest_area <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-04-06/forest_area.csv')
+brazil <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-04-06/brazil_loss.csv')
+```
+
+
+First of all, I wanted to see how spread out deforestation is for each country in the dataset, and whether any interesting pattern can be seen when looking at the forest conversion for each country. This is a positive number in case more trees were planted, and a negative, if deforestation resulted in the dissaperance of green space. I used the world map and merged it with the Forest dataset after some minor transformations. I also created a categorical variable to see the amount of forest conversion that occurred in given country.
+
+```{r, message = F}
+
+
+world <- map_data("world")
+
+forest <- forest %>%
+    mutate(region = 
+           recode(entity,
+                  "Congo" = "Republic of Congo",
+                  "French Guyana" = "French Guiana",
+                  "United Kingdom" = "UK",
+                  "United States" = "USA"
+           ),
+           
+           # cut at specific point for mapping
+           net_forest_conversion_f = cut(net_forest_conversion, breaks = c(-1500000, -400000, -200000,
+                                                                           -100000, 0, 100000, 200000,
+                                                                           400000,2000000))
+    )
+
+```
+
+I wrote the below function to plot this in the world map for any given year - e.g: below image will plot the worldmap as of 2015. 
+
+```{r, message = F}
+create_map <- function(world, forest, year_of_plot) {
+    
+    # merge the datasets
+    merged <- left_join(world, forest[year == year_of_plot,], by = "region")
+    
+    chart <- 
+    merged %>%
+        ggplot() +
+        
+        #Adding world map as polygon
+        geom_polygon(data = merged, 
+                     aes(x = long, 
+                         y = lat, 
+                         group = group, 
+                         fill = net_forest_conversion_f), 
+                     color = "black", 
+                     size = .1) +
+        
+        # formatting labs so that nothing is shown but the title
+        labs(title = glue("Net change in forest cover in {year_of_plot}"), x='', y='') + 
+        
+        # colouring and 
+        scale_fill_brewer(palette = 'PRGn', name = '',
+                          labels = c("-400,000 hectares", 
+                                     "-200,000 hectares",
+                                     "-100,000 hectares",
+                                     "0 hectares",
+                                     "+100,000 hectares",
+                                     "+200,000 hectares",
+                                     "+400,000 hectares",
+                                     "+600,000 hectares")) + 
+        theme(
+            legend.position = "top",
+            plot.title = element_text(hjust = 0.5, size = unit(24, "mm")),
+            axis.title.x=element_blank(),
+            axis.text.x=element_blank(),
+            axis.ticks.x=element_blank(),
+            axis.title.y=element_blank(),
+            axis.text.y=element_blank(),
+            axis.ticks.y=element_blank(),
+            panel.grid.major = element_blank(), 
+            panel.grid.minor = element_blank(),
+            panel.background = element_blank()
+        )
+
+    return(chart)
+
+}
+
+```
+
+```{r, message = F, fig.width=10, fig.height= 7}
+create_map(world,forest,2015)
+
+```
+
+
+Based on the above we can see that: 
+
+ - Forests in South America and mostly Brazil started disappearing in a rapid pace
+ - All of Africa and Indonesia show a decreasing tendency, that is dangerously high in certain territories
+ - The rest of BRIC is doing great when it comes to forests, and most countries in Europe pay attention to their green space. 
+ 
+To check whether the above conclusions are proven on a longer timeframe, I created area plots per continents. I first mapped the continent to every country with the `countrycode()` function, and did some aggregation. 
+
+```{r, message = F}
+
+# Adding continents to forest and forest area
+forest <- cbind(forest, countrycode(sourcevar = forest[,entity],
+                                    origin = "country.name",
+                                    destination = "continent"))
+setnames(forest, 'V2', 'continent')
+
+forest_area['continent'] <- countrycode(sourcevar = forest_area[["entity"]],
+            origin = "country.name",
+            destination = "continent")
+
+```
+
+``` {r}
+# Aggregating data for plots for both forest and forest_area
+agg_forest <- forest[!is.na(continent),
+                     list('net_forest_conversion'=sum(net_forest_conversion)),
+                     by=.(continent,year)]
+
+agg_forest$positive<- ifelse(agg_forest$net_forest_conversion<0,'no','yes')
+
+agg_forest$net_forest_conversion <- agg_forest$net_forest_conversion / 1000000
+
+agg_forar <- forest_area %>% filter(!is.na(continent)) %>% 
+    group_by(continent, year) %>% 
+    summarise(forest_area = sum(forest_area))
+
+```
+
+After that I plotted the area charts, with years on the x axis and the share of forests each continent had on the y axis. There seems to be some issue with the data regarding the forest share of Europe in the early time horizon, but from around 1992, it looks to be correct. 
+
+```{r, message = F, fig.width  = 10}
+ggplot(data = agg_forar, aes(x = year, y= forest_area, fill = reorder(continent, forest_area))) + 
+    geom_area() +  scale_fill_brewer(palette = 'PRGn') + 
+    theme(
+        plot.title = element_text(hjust = 0.5, size = unit(15, "mm")),
+        legend.title = element_blank(),
+        legend.position = 'top',
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()
+    ) + labs(title ='Forest areas of continents between 1990 and 2020' , x='', y='')
+
+```
+
+
+It is also apparent that the forest share of the Americas has been gradually decreasing from the 90s and it continues to do so until the end of the examined period. Asia and Europe in the meantime catches on and steals forest share with the help of their positive forest conversions that we saw eariler.
+
+The next plot shows how the forest conversions aggregated to each continent for all 4 years when there is data available:
+
+```{r, message = F, fig.width = 10, fig.height= 6}
+ggplot(data= agg_forest , aes(x = reorder(continent,net_forest_conversion), y = net_forest_conversion)) + 
+    geom_bar(stat='identity', aes(fill=positive)) + 
+    coord_flip() + 
+    labs(title= 'Aggregate forest conversion for continents (in mm hectar)', x= '', y='') + 
+    scale_fill_manual(values = c('darkorchid4','seagreen4')) + 
+    theme(
+        plot.title = element_text(hjust = 0.5, size = unit(15, "mm")),
+        legend.position = 'none',
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()
+    ) + facet_wrap(~year)
+```
+
+This figure shows exactly what we have seen in the earlier plots - Africa and the Americas have been demolishing their forests while Europe and Asia strives for regrowing it. One of the main contributor to this change is Brazil, let's take a look at the most important drivers of the Brazilian deforestation.
+
+```{r, message = F, fig.width = 10, fig.height= 6}
+brazil_use<- brazil %>% select(!c(entity,code)) %>% as.data.table()
+brazil_use <- melt(brazil_use, 'year')
+
+brazil_use$tooltip <- c(paste0('Driver is: ', 
+                               brazil_use$variable, 
+                               " it's contribution to Brazil's deforestation is: ",
+                               round(brazil_use$value/1000000,2),'mm in the year ',
+                               brazil_use$year))
+
+```
+
+```{r}
+
+p1<- ggplot(data = brazil_use, aes(x = year, y = value, group = variable, tooltip = variable)) +
+    geom_line_interactive(aes(color = variable, tooltip = variable, data_id = variable)) +
+    geom_point_interactive(aes(color = variable, tooltip = tooltip, data_id = variable), size = 2) +
+    scale_color_brewer(palette = 'PRGn') + labs(x = '', y = '') +
+    scale_y_continuous(labels = scales::unit_format(unit = "M", scale = 1e-6)) +
+    theme(
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = unit(24, "mm")),
+        axis.title.x=element_blank(),
+        #axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        #axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank())
+```
+
+```{r,cache=F, include=TRUE, warning=TRUE}
+girafe(ggobj =  p1, 
+       options = list(
+           opts_hover_inv(css = "opacity:0.1;"), 
+           opts_hover(css = "stroke-width:5;stroke:#2c7fb8;"), 
+           opts_tooltip( 
+               offx = 120,
+               offy = 400, 
+               use_cursor_pos = FALSE,
+               opacity =  0.9)
+       )) 
+```
+
+*For some reason `ggiraph` doesn't plot the interactive plots when knitted to RMD, I couldn't figure out how to fix it, so I will leave the code above (it run smoothly in R scripts). I will plot the static image and talk about that*
+
+```{r, fig.width=10}
+p1 + theme(legend.position = 'left')
+```
+
+We can see from the above plot that the most common driver for deforestation in Brazil was pasture - which doesn't seem to be very harmful, as it only means that most of the cleaned forest are used to feed livestock. There is a significantly decreasing trend in pasture, so there is hope that the deforestation trend in Brazil can get steadily slower (maybe they keep lower livestock to support sustainabilty). The second biggest driver is small scale clearing which is the act of non-mechanised forest clearing for the sake of agriculture - this is probably something that can be modernised on the long run, but it will require serious investment from the government. The other drivers seem to be on very similar levels, but it is interesting to see that fire is popping up as a big driver spiking at 2007 and 2010 as well. It would be interesting to see data on 2020-2021, to see how recent scandals compare to these historic peaks. 
+
+---
+
+*The below code is to create a gganimate animation from the world map, but even after rendering for 2 hours RMD didn't produce the animation. I will leave the code here to show that it could have been created and could have shown very nicely how deforestation cover went by over the 4 years that are available *
+
+```{r}
+library(gganimate)
+#Bonus - This 
+year <- data.frame(year = c(1990,2000,2010,2015))
+merged <- merge(world,year)
+
+merged <- left_join(merged, forest, by = c('year',"region"))
+
+chart <- 
+    merged %>%
+    ggplot() +
+    
+    #Adding world map as polygon
+    geom_polygon(data = merged, 
+                 aes(x = long, 
+                     y = lat, 
+                     group = group, 
+                     fill = net_forest_conversion_f), 
+                 color = "black", 
+                 size = .1) +
+    
+    
+    # colouring  
+    scale_fill_brewer(palette = 'PRGn', name = '',
+                      labels = c("-400,000 hectares", 
+                                 "-200,000 hectares",
+                                 "-100,000 hectares",
+                                 "0 hectares",
+                                 "+100,000 hectares",
+                                 "+200,000 hectares",
+                                 "+400,000 hectares",
+                                 "+600,000 hectares")) + 
+    theme(
+        legend.position = "top",
+        plot.title = element_text(hjust = 0.5, size = unit(24, "mm")),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()
+    ) 
+
+### Commenting out last line as it would never knit otherwise ###
+
+#chart + transition_states(year) + labs(title = paste0('Year:', year)
+
+
+```
